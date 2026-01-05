@@ -1,4 +1,5 @@
 #include <time.h>
+#include <string>
 
 struct Inode {
     int id;
@@ -13,6 +14,14 @@ struct Inode {
 };
 
 Inode createInode(int id, bool isDirectory);
+
+void saveInode(const Inode& inode);
+
+int allocateInode();
+
+void freeInode(int id);
+
+int findInodeId(const std::string& rawName, int currentDirectoryInode);
 
 int calculateInodeSize(const Inode& inode);
 

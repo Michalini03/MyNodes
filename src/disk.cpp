@@ -1,4 +1,6 @@
 #include "../include/disk.h"
+#include "../include/inode.h"
+#include "../include/directory.h"
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -17,31 +19,19 @@ void formatDisk(const std::string& name) {
         return;
     }
 
-    // 1. Initialize Superblock
+    //Initialize Superblock
     Superblock sb;
     sb.magicNumber = MAGIC_NUMBER;
     sb.blockSize = BLOCK_SIZE;
     sb.totalBlocks = DISK_SIZE / BLOCK_SIZE;
-    
-    // Heuristic: Let's reserve 10% of blocks for Inodes
-    // Note: We will calculate exact inode table size in the next steps, 
-    // for now, let's just set up the basic metadata.
-    sb.totalInodes = (DISK_SIZE / 10) / sizeof(int); // Rough estimate
-    sb.freeBlocks = sb.totalBlocks; 
-    sb.freeInodes = sb.totalInodes;
+    sb.totalInodes = MAX_INODES;
+    sb.freeBlocks = sb.totalBlocks - 13; // Subtract reserved blocks (SB + Bitmaps + InodeTable)
+    sb.freeInodes = MAX_INODES;
 
-    // 2. Write Superblock to the start of the file
     file.write(reinterpret_cast<const char*>(&sb), sizeof(Superblock));
 
-    // 3. Clear the rest of the disk (write 0s)
-    // We create a buffer of one block size filled with zeros
     std::vector<char> emptyBlock(BLOCK_SIZE, 0);
 
-    // We write enough blocks to fill the disk size
-    // (Subtract 1 because the superblock takes up part of the first chunk, 
-    // but for simplicity in this align-ment, we usually write the SB then pad to block size)
-    
-    // Move pointer to the beginning of the next block after superblock
     file.seekp(BLOCK_SIZE, std::ios::beg);
 
     for (int i = 1; i < sb.totalBlocks; ++i) {
@@ -50,4 +40,144 @@ void formatDisk(const std::string& name) {
 
     file.close();
     std::cout << "Disk formatted successfully. Size: " << DISK_SIZE / (1024*1024) << " MB." << std::endl;
+    
+    mountDisk(name);
+    initializeRootDirectory();
+}
+
+int allocateDataBlock() {
+    std::string diskName = getDiskName();
+    std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
+    
+    if (!file.is_open()) {
+        std::cerr << "[ERROR] allocateDataBlock failed to open file: " << diskName << std::endl;
+        return -1;
+    }
+
+    // 1. Read Data Bitmap (Block 2)
+    std::vector<char> bitmap(BLOCK_SIZE);
+    file.seekg(DATA_BITMAP_OFFSET, std::ios::beg);
+    file.read(bitmap.data(), BLOCK_SIZE);
+
+    // Find free bit
+    int freeBlockIndex = -1;
+    for (int i = 0; i < BLOCK_SIZE * 8; ++i) { 
+        int byteIndex = i / 8;
+        int bitIndex = i % 8;
+        
+        if (!((bitmap[byteIndex] >> bitIndex) & 1)) {
+            freeBlockIndex = i;
+            // Mark as used
+            bitmap[byteIndex] |= (1 << bitIndex);
+            break;
+        }
+    }
+
+    // Save Bitmap
+    if (freeBlockIndex != -1) {
+        file.seekp(DATA_BITMAP_OFFSET, std::ios::beg);
+        file.write(bitmap.data(), BLOCK_SIZE);
+    }
+    else {
+        std::cerr << "Error: No free data blocks available!" << std::endl;
+        freeBlockIndex = -1;
+    }
+    
+    file.close();
+    return freeBlockIndex; // Returns -1 if no free block found
+}
+
+void saveDataBlock(int blockIndex, const std::vector<char>& data) {
+    std::string diskName = getDiskName();
+    std::ofstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
+    
+    if (!file.is_open()) {
+        std::cerr << "[ERROR] saveDataBlock failed to open file: " << diskName << std::endl;
+        return;
+    }
+
+    // Data starts at DATA_OFFSET (Block 13)
+    int offset = DATA_OFFSET + (blockIndex * BLOCK_SIZE);
+
+    file.seekp(offset, std::ios::beg);
+    if (data.size() >= BLOCK_SIZE) {
+         file.write(data.data(), BLOCK_SIZE);
+    } 
+    else {
+        // Pad with zeros if input is too small (safety)
+        std::vector<char> padded = data;
+        padded.resize(BLOCK_SIZE, 0);
+        file.write(padded.data(), BLOCK_SIZE);
+    }
+    
+    file.close();
+}
+
+void initializeRootDirectory() {
+    // First Inode (ID 0) is the root directory
+    int inodeId = allocateInode(); 
+    int blockId = allocateDataBlock();
+
+    if (inodeId == -1 || blockId == -1) {
+        std::cerr << "[ERROR] Failed to allocate Inode or Data Block for root directory!" << std::endl;
+        return;
+    }
+
+    if (inodeId != 0 || blockId != 0) {
+        std::cerr << "[ERROR] Root directory did not get Inode 0!" << std::endl;
+        std::cerr << "Initialization failed.\n Inode ID: " << inodeId << "\n Block ID: " << blockId << std::endl;
+        return;
+    }
+
+    std::vector<char> blockData(BLOCK_SIZE, 0);
+    
+    DirEntry dot;
+    std::strncpy(dot.name, ".", 32);
+    dot.inodeNumber = inodeId;
+
+    DirEntry dotdot;
+    std::strncpy(dotdot.name, "..", 32);
+    dotdot.inodeNumber = inodeId;
+
+    std::memcpy(blockData.data(), &dot, sizeof(DirEntry));
+    std::memcpy(blockData.data() + sizeof(DirEntry), &dotdot, sizeof(DirEntry));
+
+    Inode root = createInode(inodeId, true);
+    root.directBlocks[0] = blockId;
+    root.size = 2 * sizeof(DirEntry); 
+    
+    saveInode(root);
+    saveDataBlock(blockId, blockData);
+
+    std::cout << "Root directory created (Inode 0)." << std::endl;
+}
+
+void freeDataBlock(int blockIndex) {
+    std::string diskName = getDiskName();
+    std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file.is_open()) return;
+
+    std::vector<char> bitmap(BLOCK_SIZE);
+    file.seekg(DATA_BITMAP_OFFSET, std::ios::beg);
+    file.read(bitmap.data(), BLOCK_SIZE);
+
+    int byteIndex = blockIndex / 8;
+    int bitIndex = blockIndex % 8;
+    
+    bitmap[byteIndex] &= ~(1 << bitIndex);
+
+    file.seekp(DATA_BITMAP_OFFSET, std::ios::beg);
+    file.write(bitmap.data(), BLOCK_SIZE);
+    
+    file.close();
+}
+
+static std::string mountedDiskName = "";
+
+void mountDisk(const std::string& name) {
+    mountedDiskName = name;
+}
+
+std::string getDiskName() {
+    return mountedDiskName;
 }

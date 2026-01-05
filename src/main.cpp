@@ -18,6 +18,8 @@ int main(int argc, char* argv[]) {
 
     if (checkIfDiskExists(diskName)) {
         std::cout << "Disk found. Loading..." << std::endl;
+        mountDisk(diskName);
+
         // In the future, we will verify the Magic Number here to ensure it's valid.
     } else {
         std::cout << "Disk not found. Do you want to format it? (Y/N)" << std::endl;
