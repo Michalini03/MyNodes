@@ -3,6 +3,7 @@
 #include <string>
 #include "../include/disk.h"
 #include "../include/filesystem.h"
+#include "../include/utils.h"
 
 
 int main(int argc, char* argv[]) {
@@ -11,7 +12,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string diskName = "data/" + std::string(argv[1]) + ".dat";
+    std::string diskName = "data/" + std::string(argv[1]);
 
     std::cout << "Starting MyNodes program..." << std::endl;
     std::cout << "Target Disk: " << diskName << std::endl;
@@ -30,7 +31,11 @@ int main(int argc, char* argv[]) {
             std::cout << "Exiting program. Disk formatting declined." << std::endl;
             return 0;
         }
-        formatDisk(diskName);
+        std::cout << "How much space do you want to allocate for the disk? (e.g., 600MB)" << std::endl;
+        std::string sizeArg;
+        std::getline(std::cin, sizeArg);
+        long long size = parseSize(sizeArg);
+        formatDisk(diskName, size);
     }
 
     return startConsoleProgram();

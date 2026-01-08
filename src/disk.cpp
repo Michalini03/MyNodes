@@ -10,7 +10,7 @@ bool checkIfDiskExists(const std::string& name) {
     return file.good();
 }
 
-void formatDisk(const std::string& name) {
+void formatDisk(const std::string& name, long long sizeBytes) {
     std::cout << "Formatting disk: " << name << "..." << std::endl;
 
     std::ofstream file(name, std::ios::binary | std::ios::out);
@@ -23,9 +23,9 @@ void formatDisk(const std::string& name) {
     Superblock sb;
     sb.magicNumber = MAGIC_NUMBER;
     sb.blockSize = BLOCK_SIZE;
-    sb.totalBlocks = DISK_SIZE / BLOCK_SIZE;
+    sb.totalBlocks = sizeBytes / BLOCK_SIZE;
     sb.totalInodes = MAX_INODES;
-    sb.freeBlocks = sb.totalBlocks - 13; // Subtract reserved blocks (SB + Bitmaps + InodeTable)
+    sb.freeBlocks = sb.totalBlocks - 10;
     sb.freeInodes = MAX_INODES;
 
     file.write(reinterpret_cast<const char*>(&sb), sizeof(Superblock));
@@ -39,7 +39,7 @@ void formatDisk(const std::string& name) {
     }
 
     file.close();
-    std::cout << "Disk formatted successfully. Size: " << DISK_SIZE / (1024*1024) << " MB." << std::endl;
+    std::cout << "Disk formatted successfully. Size: " << sizeBytes / (1024*1024) << " MB." << std::endl;
     
     mountDisk(name);
     initializeRootDirectory();
@@ -132,11 +132,11 @@ void initializeRootDirectory() {
     std::vector<char> blockData(BLOCK_SIZE, 0);
     
     DirEntry dot;
-    std::strncpy(dot.name, ".", 32);
+    std::strncpy(dot.name, ".", 12);
     dot.inodeNumber = inodeId;
 
     DirEntry dotdot;
-    std::strncpy(dotdot.name, "..", 32);
+    std::strncpy(dotdot.name, "..", 12);
     dotdot.inodeNumber = inodeId;
 
     std::memcpy(blockData.data(), &dot, sizeof(DirEntry));

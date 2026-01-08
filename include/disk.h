@@ -29,7 +29,7 @@ struct Superblock {
 };
 
 bool checkIfDiskExists(const std::string& name);
-void formatDisk(const std::string& name);
+void formatDisk(const std::string& name, long long sizeBytes);
 
 // Data Block Management
 int allocateDataBlock();
