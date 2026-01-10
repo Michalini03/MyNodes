@@ -73,9 +73,17 @@ int allocateInode() {
     }
 
     if (freeId != -1) {
-        // Write the updated bitmap back to disk
         file.seekp(INODE_BITMAP_OFFSET, std::ios::beg);
         file.write(bitmap.data(), BLOCK_SIZE);
+
+        Superblock sb;
+        file.seekg(0, std::ios::beg);
+        file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+        
+        sb.freeInodes--;
+        
+        file.seekp(0, std::ios::beg);
+        file.write(reinterpret_cast<char*>(&sb), sizeof(Superblock));
     }
 
     file.close();
@@ -98,6 +106,15 @@ void freeInode(int id) {
 
     file.seekp(INODE_BITMAP_OFFSET, std::ios::beg);
     file.write(bitmap.data(), BLOCK_SIZE);
+
+    Superblock sb;
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+    
+    sb.freeInodes++;
+    
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<char*>(&sb), sizeof(Superblock));
     
     file.close();
 }

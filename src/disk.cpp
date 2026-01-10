@@ -77,6 +77,15 @@ int allocateDataBlock() {
     if (freeBlockIndex != -1) {
         file.seekp(DATA_BITMAP_OFFSET, std::ios::beg);
         file.write(bitmap.data(), BLOCK_SIZE);
+
+        Superblock sb;
+        file.seekg(0, std::ios::beg);
+        file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+        
+        sb.freeBlocks--;
+        
+        file.seekp(0, std::ios::beg);
+        file.write(reinterpret_cast<char*>(&sb), sizeof(Superblock));
     }
     else {
         std::cerr << "Error: No free data blocks available!" << std::endl;
@@ -168,6 +177,15 @@ void freeDataBlock(int blockIndex) {
 
     file.seekp(DATA_BITMAP_OFFSET, std::ios::beg);
     file.write(bitmap.data(), BLOCK_SIZE);
+
+    Superblock sb;
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+
+    sb.freeBlocks++;
+
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<char*>(&sb), sizeof(Superblock));
     
     file.close();
 }
