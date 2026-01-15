@@ -119,35 +119,6 @@ void freeInode(int id) {
     file.close();
 }
 
-int findInodeId(const std::string& rawName, int currentDirectoryInode) {
-    std::string name = deleteTrailingWhitespace(rawName);
-
-    std::string diskName = getDiskName();
-    std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
-    if (!file.is_open()) return -1;
-
-    Inode parentInode;
-    int parentOffset = INODE_TABLE_OFFSET + (currentDirectoryInode * sizeof(Inode));
-    file.seekg(parentOffset, std::ios::beg);
-    file.read(reinterpret_cast<char*>(&parentInode), sizeof(Inode));
-
-    int blockIndex = parentInode.directBlocks[0];
-    std::vector<char> block(BLOCK_SIZE);
-    file.seekg(DATA_OFFSET + (blockIndex * BLOCK_SIZE), std::ios::beg);
-    file.read(block.data(), BLOCK_SIZE);
-
-    int maxEntries = BLOCK_SIZE / sizeof(DirEntry);
-    for (int i = 0; i < maxEntries; ++i) {
-        DirEntry* entry = reinterpret_cast<DirEntry*>(block.data() + (i * sizeof(DirEntry)));
-        if (entry->inodeNumber != 0 || entry->name[0] != '\0') {
-            if (std::string(entry->name) == name) {
-                return entry->inodeNumber;
-            }
-        }
-    }
-    return -1;
-}
-
 int calculateInodeSize(const Inode& inode) {
     return sizeof(inode);
 }

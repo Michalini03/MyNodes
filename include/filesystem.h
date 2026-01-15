@@ -15,7 +15,7 @@ void printWorkingDirectory();
 void createFile(const std::string& name);
 bool deleteFile(const std::string& rawName);
 bool writeFile(const std::string& fileName, const std::string& content);
-void copyFile(const std::string& hostPath, const std::string& destFileName);
+bool copyFile(const std::string& hostPath, const std::string& destFileName);
 void extendedCopy(const std::string& src1, const std::string& src2, const std::string& dest);
 void readFile(const std::string& fileName);
 void moveFile(const std::string& oldRaw, const std::string& newRaw);

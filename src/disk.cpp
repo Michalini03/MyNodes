@@ -48,52 +48,49 @@ void formatDisk(const std::string& name, long long sizeBytes) {
 int allocateDataBlock() {
     std::string diskName = getDiskName();
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
-    
-    if (!file.is_open()) {
-        std::cerr << "[ERROR] allocateDataBlock failed to open file: " << diskName << std::endl;
+    if (!file.is_open()) return -1;
+
+    Superblock sb;
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+
+    if (sb.freeBlocks <= 0) {
         return -1;
     }
 
-    // 1. Read Data Bitmap (Block 2)
     std::vector<char> bitmap(BLOCK_SIZE);
     file.seekg(DATA_BITMAP_OFFSET, std::ios::beg);
     file.read(bitmap.data(), BLOCK_SIZE);
 
-    // Find free bit
     int freeBlockIndex = -1;
-    for (int i = 0; i < BLOCK_SIZE * 8; ++i) { 
+    
+    for (int i = 0; i < sb.totalBlocks; ++i) { 
         int byteIndex = i / 8;
         int bitIndex = i % 8;
         
         if (!((bitmap[byteIndex] >> bitIndex) & 1)) {
             freeBlockIndex = i;
-            // Mark as used
             bitmap[byteIndex] |= (1 << bitIndex);
             break;
         }
     }
 
-    // Save Bitmap
     if (freeBlockIndex != -1) {
+        // Save Bitmap
         file.seekp(DATA_BITMAP_OFFSET, std::ios::beg);
         file.write(bitmap.data(), BLOCK_SIZE);
 
-        Superblock sb;
-        file.seekg(0, std::ios::beg);
-        file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
-        
-        sb.freeBlocks--;
-        
+        // Update Superblock
+        sb.freeBlocks--; 
         file.seekp(0, std::ios::beg);
         file.write(reinterpret_cast<char*>(&sb), sizeof(Superblock));
     }
     else {
-        std::cerr << "Error: No free data blocks available!" << std::endl;
-        freeBlockIndex = -1;
+        std::cerr << "Error: No free data blocks available (Disk Full)!" << std::endl;
     }
     
     file.close();
-    return freeBlockIndex; // Returns -1 if no free block found
+    return freeBlockIndex;
 }
 
 void saveDataBlock(int blockIndex, const std::vector<char>& data) {

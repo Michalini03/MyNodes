@@ -21,8 +21,6 @@ int allocateInode();
 
 void freeInode(int id);
 
-int findInodeId(const std::string& rawName, int currentDirectoryInode);
-
 int calculateInodeSize(const Inode& inode);
 
 int actualizeInodeTime(Inode& inode);

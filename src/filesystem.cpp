@@ -51,6 +51,7 @@ bool executeCommand(std::string commandLine) {
             } else {
                 sizeVal = parseSize(strVal);
                 formatDisk(getDiskName(), sizeVal);
+                currentDirectoryInode = 0;
             }
         } else {
             std::cout << "Usage: format <size_in_bytes>" << std::endl;
@@ -441,8 +442,15 @@ void listDirectory(int inodeId) {
     }
 }
 
-bool removeDirectory(const std::string& rawName) {
-    std::string name = deleteTrailingWhitespace(rawName);
+bool removeDirectory(const std::string& path) {
+    std::pair<int, std::string> result = resolveParentAndName(path);
+    int parentInodeId = result.first;
+    std::string name = result.second;
+
+    if (parentInodeId == -1) {
+        std::cerr << "Error: Directory path not found." << std::endl;
+        return false;
+    }
 
     if (name == "." || name == "..") {
         std::cerr << "Error: Cannot delete system entries." << std::endl;
@@ -453,8 +461,8 @@ bool removeDirectory(const std::string& rawName) {
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
     if (!file.is_open()) return false;
 
-    Inode parentInode; // Loading current directory inode
-    file.seekg(INODE_TABLE_OFFSET + (currentDirectoryInode * sizeof(Inode)), std::ios::beg);
+    Inode parentInode;
+    file.seekg(INODE_TABLE_OFFSET + (parentInodeId * sizeof(Inode)), std::ios::beg);
     file.read(reinterpret_cast<char*>(&parentInode), sizeof(Inode));
 
     std::vector<char> parentBlock(BLOCK_SIZE);
@@ -469,8 +477,8 @@ bool removeDirectory(const std::string& rawName) {
     for (int i = 0; i < maxEntries; ++i) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(parentBlock.data() + (i * sizeof(DirEntry)));
         if (entry->inodeNumber != 0) {
-            std::string entryName = std::string(entry->name);
-            if (entryName == name) {
+            // Check only valid entries
+            if (std::string(entry->name) == name) {
                 entryIndex = i;
                 targetInodeId = entry->inodeNumber;
                 break;
@@ -483,7 +491,12 @@ bool removeDirectory(const std::string& rawName) {
         return false;
     }
 
-    // Target is a Directory and is EMPTY
+    // --- SAFETY CHECK: Prevent deleting current directory ---
+    if (targetInodeId == currentDirectoryInode) {
+        std::cerr << "Error: Cannot remove current working directory." << std::endl;
+        return false;
+    }
+
     Inode targetInode;
     file.seekg(INODE_TABLE_OFFSET + (targetInodeId * sizeof(Inode)), std::ios::beg);
     file.read(reinterpret_cast<char*>(&targetInode), sizeof(Inode));
@@ -492,6 +505,7 @@ bool removeDirectory(const std::string& rawName) {
         std::cerr << "Error: '" << name << "' is a file. Use rm." << std::endl;
         return false;
     }
+
     if (targetInode.size > 2 * (int)sizeof(DirEntry)) {
         std::cerr << "Error: Directory is not empty." << std::endl;
         return false;
@@ -504,6 +518,11 @@ bool removeDirectory(const std::string& rawName) {
     file.seekp(parentBlockOffset, std::ios::beg);
     file.write(parentBlock.data(), BLOCK_SIZE);
 
+    parentInode.size -= sizeof(DirEntry);
+    file.seekp(INODE_TABLE_OFFSET + (parentInodeId * sizeof(Inode)), std::ios::beg);
+    file.write(reinterpret_cast<char*>(&parentInode), sizeof(Inode));
+
+    std::cout << "Directory '" << name << "' removed." << std::endl;
     return true;
 }
 
@@ -565,7 +584,6 @@ bool addEntryToDirectory(int parentInodeId, const std::string& rawName, int newI
         if (isOccupied) { 
             if (entryName == name) {
                 std::cerr << "[ERROR] File '" << name << "' already exists." << std::endl;
-                freeInode(newInodeId); 
                 return false;
             }
         } else {
@@ -595,11 +613,18 @@ bool addEntryToDirectory(int parentInodeId, const std::string& rawName, int newI
     return true;
 }
 
-bool deleteFile(const std::string& rawName) {
-    std::string name = deleteTrailingWhitespace(rawName);
+bool deleteFile(const std::string& path) {
+    std::pair<int, std::string> result = resolveParentAndName(path);
+    int parentInodeId = result.first;
+    std::string name = result.second;
+
+    if (parentInodeId == -1) {
+        std::cerr << "Error: Directory path not found." << std::endl;
+        return false;
+    }
 
     if (name == "." || name == "..") {
-        std::cerr << "Error: Cannot delete system directories." << std::endl;
+        std::cerr << "Error: Cannot delete system entries." << std::endl;
         return false;
     }
 
@@ -607,28 +632,24 @@ bool deleteFile(const std::string& rawName) {
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
     if (!file.is_open()) return false;
 
-    // --- FIX: USE CURRENT DIRECTORY INODE ---
     Inode parentInode;
-    int parentOffset = INODE_TABLE_OFFSET + (currentDirectoryInode * sizeof(Inode));
+    int parentOffset = INODE_TABLE_OFFSET + (parentInodeId * sizeof(Inode));
     file.seekg(parentOffset, std::ios::beg);
     file.read(reinterpret_cast<char*>(&parentInode), sizeof(Inode));
 
-    int blockIndex = parentInode.directBlocks[0];
-    int blockOffset = DATA_OFFSET + (blockIndex * BLOCK_SIZE);
-    
-    std::vector<char> block(BLOCK_SIZE);
-    file.seekg(blockOffset, std::ios::beg);
-    file.read(block.data(), BLOCK_SIZE);
+    std::vector<char> parentBlock(BLOCK_SIZE);
+    int parentBlockOffset = DATA_OFFSET + (parentInode.directBlocks[0] * BLOCK_SIZE);
+    file.seekg(parentBlockOffset, std::ios::beg);
+    file.read(parentBlock.data(), BLOCK_SIZE);
 
     int entryIndex = -1;
     int targetInodeId = -1;
     int maxEntries = BLOCK_SIZE / sizeof(DirEntry);
 
     for (int i = 0; i < maxEntries; ++i) {
-        DirEntry* entry = reinterpret_cast<DirEntry*>(block.data() + (i * sizeof(DirEntry)));
+        DirEntry* entry = reinterpret_cast<DirEntry*>(parentBlock.data() + (i * sizeof(DirEntry)));
         if (entry->inodeNumber != 0) {
-            std::string entryName = std::string(entry->name);
-            if (entryName == name) {
+            if (std::string(entry->name) == name) {
                 entryIndex = i;
                 targetInodeId = entry->inodeNumber;
                 break;
@@ -647,7 +668,7 @@ bool deleteFile(const std::string& rawName) {
     file.read(reinterpret_cast<char*>(&targetInode), sizeof(Inode));
 
     if (targetInode.isDirectory) {
-        std::cerr << "Error: '" << name << "' is a directory. Use rmdir (not implemented yet) or generic rm." << std::endl;
+        std::cerr << "Error: '" << name << "' is a directory. Use rmdir." << std::endl;
         return false;
     }
 
@@ -663,28 +684,48 @@ bool deleteFile(const std::string& rawName) {
         file.seekg(DATA_OFFSET + (targetInode.singleIndirect * BLOCK_SIZE), std::ios::beg);
         file.read(reinterpret_cast<char*>(indirectTable.data()), BLOCK_SIZE);
 
-        // Free every block listed in the table
         for (int blockId : indirectTable) {
-            if (blockId != -1) {
-                freeDataBlock(blockId);
-            }
+            if (blockId != -1) freeDataBlock(blockId);
         }
-
         freeDataBlock(targetInode.singleIndirect);
         targetInode.singleIndirect = -1;
     }
 
+    if (targetInode.doubleIndirect != -1) {
+        int ptrsPerBlock = BLOCK_SIZE / sizeof(int);
+        
+        std::vector<int> masterTable(ptrsPerBlock);
+        file.seekg(DATA_OFFSET + (targetInode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
+        file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
+
+        for (int innerTableBlockId : masterTable) {
+            if (innerTableBlockId != -1) {
+                std::vector<int> innerTable(ptrsPerBlock);
+                file.seekg(DATA_OFFSET + (innerTableBlockId * BLOCK_SIZE), std::ios::beg);
+                file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
+
+                for (int dataBlockId : innerTable) {
+                    if (dataBlockId != -1) freeDataBlock(dataBlockId);
+                }
+                
+                freeDataBlock(innerTableBlockId);
+            }
+        }
+        freeDataBlock(targetInode.doubleIndirect);
+        targetInode.doubleIndirect = -1;
+    }
+
     freeInode(targetInodeId);
 
-    std::memset(block.data() + (entryIndex * sizeof(DirEntry)), 0, sizeof(DirEntry));
-
-    file.seekp(blockOffset, std::ios::beg);
-    file.write(block.data(), BLOCK_SIZE);
+    std::memset(parentBlock.data() + (entryIndex * sizeof(DirEntry)), 0, sizeof(DirEntry));
+    file.seekp(parentBlockOffset, std::ios::beg);
+    file.write(parentBlock.data(), BLOCK_SIZE);
 
     parentInode.size -= sizeof(DirEntry);
     file.seekp(parentOffset, std::ios::beg);
     file.write(reinterpret_cast<char*>(&parentInode), sizeof(Inode));
 
+    std::cout << "File '" << name << "' deleted." << std::endl;
     return true;
 }
 
@@ -699,7 +740,7 @@ bool writeFile(const std::string& fileName, const std::string& content) {
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
     if (!file.is_open()) return false;
 
-    // 1. Load Inode
+    // Load Inode
     Inode inode;
     int inodeOffset = INODE_TABLE_OFFSET + (inodeId * sizeof(Inode));
     file.seekg(inodeOffset, std::ios::beg);
@@ -714,59 +755,100 @@ bool writeFile(const std::string& fileName, const std::string& content) {
     int contentSize = content.size();
     int blocksNeeded = (contentSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    int indirectBlocksAvailable = BLOCK_SIZE / sizeof(int); // 1024 pointers
-    if (blocksNeeded > 10 + indirectBlocksAvailable) {
-        std::cerr << "Error: File too large (Max 4MB)." << std::endl;
+    int ptrsPerBlock = BLOCK_SIZE / sizeof(int);
+    long long maxBlocks = 10 + ptrsPerBlock + (long long)ptrsPerBlock * ptrsPerBlock;
+    
+    if (blocksNeeded > maxBlocks) {
+        std::cerr << "Error: File too large (Max ~4GB)." << std::endl;
         return false;
     }
 
-    // Write Data
     for (int i = 0; i < blocksNeeded; ++i) {
         int targetBlockId = -1;
+
         // Allocate block if not exists
-        if (i < 10 && inode.directBlocks[i] == -1) {
-            inode.directBlocks[i] = allocateDataBlock();
+        if (i < 10) {
             if (inode.directBlocks[i] == -1) {
-                std::cerr << "Error: Disk full!" << std::endl;
-                return false;
+                inode.directBlocks[i] = allocateDataBlock();
+                if (inode.directBlocks[i] == -1) return false;
             }
             targetBlockId = inode.directBlocks[i];
-        }
-
-        else if (i >=10) {
-            // Step 1: Does the "Table of Contents" block exist?
+        } 
+        // --- CASE B: Single Indirect (10 to 1033) ---
+        else if (i < 10 + ptrsPerBlock) {
             if (inode.singleIndirect == -1) {
                 inode.singleIndirect = allocateDataBlock();
                 if (inode.singleIndirect == -1) return false;
-
-                // If we don't, it defaults to 0, which points to the Superblock!
-                std::vector<int> initPtrs(indirectBlocksAvailable, -1);
+                std::vector<int> initPtrs(ptrsPerBlock, -1);
                 file.seekp(DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE), std::ios::beg);
                 file.write(reinterpret_cast<char*>(initPtrs.data()), BLOCK_SIZE);
             }
 
-            // Step 2: Read the "Table of Contents" into memory
-            // We read it as raw bytes, but store it in a vector of ints
-            std::vector<int> indirectTable(indirectBlocksAvailable);
-            int indirectOffset = DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE);
-            file.seekg(indirectOffset, std::ios::beg);
-            file.read(reinterpret_cast<char*>(indirectTable.data()), BLOCK_SIZE);
+            std::vector<int> table(ptrsPerBlock);
+            int tableOffset = DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE);
+            file.seekg(tableOffset, std::ios::beg);
+            file.read(reinterpret_cast<char*>(table.data()), BLOCK_SIZE);
 
-            // Step 3: Which entry do we need?
-            // If i = 10 (the 11th block), we need index 0 of the table.
-            int indirectIndex = i - 10;
-
-            // Step 4: Is there a Data Block allocated at this index?
-            if (indirectTable[indirectIndex] == -1) {
-                indirectTable[indirectIndex] = allocateDataBlock();
-                if (indirectTable[indirectIndex] == -1) return false;
-
-                // Step 5: Save the updated table back to disk!
-                file.seekp(indirectOffset, std::ios::beg);
-                file.write(reinterpret_cast<char*>(indirectTable.data()), BLOCK_SIZE);
+            int idx = i - 10;
+            if (table[idx] == -1) {
+                table[idx] = allocateDataBlock();
+                if (table[idx] == -1) return false;
+                file.seekp(tableOffset, std::ios::beg);
+                file.write(reinterpret_cast<char*>(table.data()), BLOCK_SIZE);
             }
-            
-            targetBlockId = indirectTable[indirectIndex];
+            targetBlockId = table[idx];
+        }
+        else {
+            // Allocate "Master" Double Indirect Block
+            if (inode.doubleIndirect == -1) {
+                inode.doubleIndirect = allocateDataBlock();
+                if (inode.doubleIndirect == -1) return false;
+                std::vector<int> initPtrs(ptrsPerBlock, -1);
+                file.seekp(DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
+                file.write(reinterpret_cast<char*>(initPtrs.data()), BLOCK_SIZE);
+            }
+
+            long long relIndex = i - (10 + ptrsPerBlock);
+            int outerIndex = relIndex / ptrsPerBlock; // Which Single Indirect block?
+            int innerIndex = relIndex % ptrsPerBlock; // Which Data block inside that?
+
+            // 3. Read Master Table
+            std::vector<int> masterTable(ptrsPerBlock);
+            int masterOffset = DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE);
+            file.seekg(masterOffset, std::ios::beg);
+            file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
+
+            // 4. Allocate the "Inner" Single Indirect Block if needed
+            if (masterTable[outerIndex] == -1) {
+                masterTable[outerIndex] = allocateDataBlock();
+                if (masterTable[outerIndex] == -1) return false;
+                
+                // Initialize new Inner Table
+                std::vector<int> initPtrs(ptrsPerBlock, -1);
+                file.seekp(DATA_OFFSET + (masterTable[outerIndex] * BLOCK_SIZE), std::ios::beg);
+                file.write(reinterpret_cast<char*>(initPtrs.data()), BLOCK_SIZE);
+
+                // Save Master Table update
+                file.seekp(masterOffset, std::ios::beg);
+                file.write(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
+            }
+
+            // 5. Read the Inner Table
+            std::vector<int> innerTable(ptrsPerBlock);
+            int innerOffset = DATA_OFFSET + (masterTable[outerIndex] * BLOCK_SIZE);
+            file.seekg(innerOffset, std::ios::beg);
+            file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
+
+            // 6. Allocate the actual Data Block
+            if (innerTable[innerIndex] == -1) {
+                innerTable[innerIndex] = allocateDataBlock();
+                if (innerTable[innerIndex] == -1) return false;
+                
+                // Save Inner Table update
+                file.seekp(innerOffset, std::ios::beg);
+                file.write(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
+            }
+            targetBlockId = innerTable[innerIndex];
         }
 
         // Save data
@@ -789,29 +871,38 @@ bool writeFile(const std::string& fileName, const std::string& content) {
     return true;
 }
 
-void copyFile(const std::string& srcRaw, const std::string& destRaw) {
-    std::string srcName = deleteTrailingWhitespace(srcRaw);
-    std::string destName = deleteTrailingWhitespace(destRaw);
-    
-    int srcInodeId = findInodeId(srcName, currentDirectoryInode);
+bool copyFile(const std::string& srcRaw, const std::string& destRaw) {
+    std::string srcPath = deleteTrailingWhitespace(srcRaw);
+    std::string destPath = deleteTrailingWhitespace(destRaw);
+
+    int srcInodeId = resolvePath(srcPath);
     if (srcInodeId == -1) {
-        std::cerr << "Error: Source file '" << srcName << "' not found." << std::endl;
-        return;
+        std::cerr << "Error: Source file '" << srcPath << "' not found." << std::endl;
+        return false;
     }
 
-    if (findInodeId(destName, currentDirectoryInode) != -1) {
-        std::cerr << "Error: Destination '" << destName << "' already exists." << std::endl;
-        return;
+    if (resolvePath(destPath) != -1) {
+        std::cerr << "Error: Destination '" << destPath << "' already exists." << std::endl;
+        return false;
     }
 
     std::string diskName = getDiskName();
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
-    if (!file.is_open()) return;
+    if (!file.is_open()) return false;
 
     std::string content = getFileContent(srcInodeId);
     
-    createFile(destName);
-    writeFile(destName, content);
+    createFile(destPath);
+    
+    if (writeFile(destPath, content)) {
+        std::cout << "File copied from '" << srcPath << "' to '" << destPath << "'." << std::endl;
+        return true;
+    } 
+    else {
+        std::cerr << "Error: Copy failed. Deleting incomplete file." << std::endl;
+        deleteFile(destPath); 
+        return false;
+    }
 }
 
 void readFile(const std::string& path) {
@@ -831,18 +922,10 @@ void readFile(const std::string& path) {
 }
 
 void moveFile(const std::string& srcRaw, const std::string& destRaw) {
-    copyFile(srcRaw, destRaw);
-
-    // We only delete the source if the destination now exists.
-    std::pair<int, std::string> p = resolveParentAndName(destRaw);
-    if (p.first != -1) {
-        int inode = findInodeId(p.second, p.first);
-        
-        if (inode != -1) {
-            deleteFile(srcRaw);
-        } else {
-            std::cerr << "Error: Move failed during copy phase. Source not deleted." << std::endl;
-        }
+    if (copyFile(srcRaw, destRaw)) {
+        deleteFile(srcRaw);
+    } else {
+        std::cout << "Move failed. Source file preserved." << std::endl;
     }
 }
 
@@ -913,37 +996,54 @@ std::string getFileContent(int inodeId) {
 
     std::string content;
     content.reserve(inode.size);
-    int bytesRemaining = inode.size;
+    long long bytesRemaining = inode.size;
     int ptrsPerBlock = BLOCK_SIZE / sizeof(int);
 
-    int totalBlocksToRead = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    for (int i = 0; i < totalBlocksToRead; ++i) {
+    long long totalBlocks = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    for (int i = 0; i < totalBlocks; ++i) {
         int blockToRead = -1;
+
         if (i < 10) {
             blockToRead = inode.directBlocks[i];
-        } else {
-            if (inode.singleIndirect == -1) break;
+        } 
+        else if (i < 10 + ptrsPerBlock) {
+            if (inode.singleIndirect != -1) {
+                std::vector<int> table(ptrsPerBlock);
+                file.seekg(DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE), std::ios::beg);
+                file.read(reinterpret_cast<char*>(table.data()), BLOCK_SIZE);
+                blockToRead = table[i - 10];
+            }
+        } 
+        else {
+            if (inode.doubleIndirect != -1) {
+                std::vector<int> masterTable(ptrsPerBlock);
+                file.seekg(DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
+                file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
 
-            // Read indirect block table
-            std::vector<int> indirectTable(ptrsPerBlock);
-            file.seekg(DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE), std::ios::beg);
-            file.read(reinterpret_cast<char*>(indirectTable.data()), BLOCK_SIZE);
+                long long relIndex = i - (10 + ptrsPerBlock);
+                int outerIndex = relIndex / ptrsPerBlock;
+                int innerIndex = relIndex % ptrsPerBlock;
 
-            int indirectIndex = i - 10;
-            blockToRead = indirectTable[indirectIndex];
+                int innerTableBlock = masterTable[outerIndex];
+                if (innerTableBlock != -1) {
+                    std::vector<int> innerTable(ptrsPerBlock);
+                    file.seekg(DATA_OFFSET + (innerTableBlock * BLOCK_SIZE), std::ios::beg);
+                    file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
+                    blockToRead = innerTable[innerIndex];
+                }
+            }
         }
 
         if (blockToRead != -1) {
             std::vector<char> buffer(BLOCK_SIZE);
             file.seekg(DATA_OFFSET + (blockToRead * BLOCK_SIZE), std::ios::beg);
             file.read(buffer.data(), BLOCK_SIZE);
-
-            int bytesToRead = std::min(BLOCK_SIZE, bytesRemaining);
+            int bytesToRead = std::min((long long)BLOCK_SIZE, bytesRemaining);
             content.append(buffer.data(), bytesToRead);
             bytesRemaining -= bytesToRead;
         }
     }
-
     return content;
 }
 
@@ -1006,7 +1106,34 @@ void showFileStats(const std::string& fileName) {
 
     if (inode.doubleIndirect != -1) {
         std::cout << " Dbl Indirect:   " << inode.doubleIndirect << " (Master Table)" << std::endl;
-        totalBlocks++;
+        totalBlocks++; 
+
+        std::vector<int> masterTable(BLOCK_SIZE / sizeof(int));
+        file.seekg(DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
+        file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
+
+        int innerTables = 0;
+        int dataBlocks = 0;
+
+        for (int innerBlockId : masterTable) {
+            if (innerBlockId != -1) {
+                innerTables++;
+                totalBlocks++; // Count the inner table itself
+
+                // Read Inner Table to count data blocks
+                std::vector<int> innerTable(BLOCK_SIZE / sizeof(int));
+                file.seekg(DATA_OFFSET + (innerBlockId * BLOCK_SIZE), std::ios::beg);
+                file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
+
+                for (int dataId : innerTable) {
+                    if (dataId != -1) {
+                        dataBlocks++;
+                        totalBlocks++;
+                    }
+                }
+            }
+        }
+        std::cout << "   -> Holds " << innerTables << " inner tables and " << dataBlocks << " data blocks." << std::endl;
     }
 
     std::cout << " Total Blocks:  " << totalBlocks << std::endl;
@@ -1048,45 +1175,42 @@ void showDiskInfo() {
 
 void extendedCopy(const std::string& src1, const std::string& src2, const std::string& dest) {
     // 1. Check Sources
-    int inode1 = findInodeId(src1, currentDirectoryInode);
+    int inode1 = resolvePath(src1);
     if (inode1 == -1) {
         std::cerr << "Error: Source file '" << src1 << "' not found." << std::endl;
         return;
     }
 
-    int inode2 = findInodeId(src2, currentDirectoryInode);
+    int inode2 = resolvePath(src2);
     if (inode2 == -1) {
         std::cerr << "Error: Source file '" << src2 << "' not found." << std::endl;
         return;
     }
 
     // 2. Check Destination
-    if (findInodeId(dest, currentDirectoryInode) != -1) {
+    if (resolvePath(dest) != -1) {
         std::cerr << "Error: Destination '" << dest << "' already exists." << std::endl;
         return;
     }
 
-    // 3. Read Content (Load both into RAM)
     // We use the helper here because merging blocks manually is very complex
     std::string content1 = getFileContent(inode1);
     std::string content2 = getFileContent(inode2);
 
-    // 4. Concatenate
     std::string combined = content1 + content2;
 
-    // 5. Create and Write
     createFile(dest);
     writeFile(dest, combined);
 }
 
 void addContent(const std::string& src, const std::string& dest) {
-    int srcInode = findInodeId(src, currentDirectoryInode);
+    int srcInode = resolvePath(src);
     if (srcInode == -1) {
         std::cerr << "Error: Source '" << src << "' not found." << std::endl;
         return;
     }
 
-    int destInode = findInodeId(dest, currentDirectoryInode);
+    int destInode = resolveParentAndName(dest).first;
     if (destInode == -1) {
         std::cerr << "Error: Destination '" << dest << "' not found." << std::endl;
         return;
@@ -1094,11 +1218,6 @@ void addContent(const std::string& src, const std::string& dest) {
 
     std::string srcContent = getFileContent(srcInode);
     std::string destContent = getFileContent(destInode);
-
-    if (srcContent.size() + destContent.size() > 40960 * 1024) { // 4MB limit
-        std::cerr << "Error: Resulting file would be too large (Max 4MB)." << std::endl;
-        return;
-    }
 
     std::string combined = destContent + srcContent;
 

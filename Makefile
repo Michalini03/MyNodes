@@ -1,7 +1,7 @@
 CXX := g++
 CXXFLAGS := -std=c++17 -O2 -Wall
 TARGET := MyNodes
-SRC := src/main.cpp src/disk.cpp src/filesystem.cpp src/directory.cpp src/inode.cpp src/utils.cpp
+SRC := src/main.cpp src/disk.cpp src/filesystem.cpp src/inode.cpp src/utils.cpp
 
 .PHONY: all clean run
 
