@@ -6,8 +6,23 @@
 #include <cstring>
 
 bool checkIfDiskExists(const std::string& name) {
-    std::ifstream file(name);
-    return file.good();
+    std::ifstream file(name, std::ios::binary);
+    if (!file.is_open()) {
+            std::cerr << "Error: Could not open disk file." << std::endl;
+            return false;
+    }
+
+    Superblock sb;
+    file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+    file.close();
+
+    if (sb.magicNumber != MAGIC_NUMBER) {
+        std::cerr << "Error: Invalid Disk Format!" << std::endl;
+        return false;
+    }
+
+    std::cout << "Disk verification successful. Loading..." << std::endl;
+    return true;
 }
 
 void formatDisk(const std::string& name, long long sizeBytes) {

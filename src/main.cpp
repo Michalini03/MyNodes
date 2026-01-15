@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
 
         // In the future, we will verify the Magic Number here to ensure it's valid.
     } else {
-        std::cout << "Disk not found. Do you want to format it? (Y/N)" << std::endl;
+        std::cout << "Do you want to format it? (Y/N)" << std::endl;
         char response;
         std::cin >> response;
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
