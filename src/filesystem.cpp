@@ -531,6 +531,11 @@ void createFile(const std::string& path) {
     int parentInodeId = result.first;
     std::string fileName = result.second;
 
+    if (fileName.empty() || !isValid83(fileName)) {
+        std::cerr << "Error: Invalid file name." << std::endl;
+        return;
+    }
+
     if (parentInodeId == -1) {
         std::cerr << "Error: Directory path not found." << std::endl;
         return;
@@ -672,49 +677,7 @@ bool deleteFile(const std::string& path) {
         return false;
     }
 
-    for (int i = 0; i < 10; ++i) {
-        if (targetInode.directBlocks[i] != -1) {
-            freeDataBlock(targetInode.directBlocks[i]);
-            targetInode.directBlocks[i] = -1;
-        }
-    }
-
-    if (targetInode.singleIndirect != -1) {
-        std::vector<int> indirectTable(BLOCK_SIZE / sizeof(int));
-        file.seekg(DATA_OFFSET + (targetInode.singleIndirect * BLOCK_SIZE), std::ios::beg);
-        file.read(reinterpret_cast<char*>(indirectTable.data()), BLOCK_SIZE);
-
-        for (int blockId : indirectTable) {
-            if (blockId != -1) freeDataBlock(blockId);
-        }
-        freeDataBlock(targetInode.singleIndirect);
-        targetInode.singleIndirect = -1;
-    }
-
-    if (targetInode.doubleIndirect != -1) {
-        int ptrsPerBlock = BLOCK_SIZE / sizeof(int);
-        
-        std::vector<int> masterTable(ptrsPerBlock);
-        file.seekg(DATA_OFFSET + (targetInode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
-        file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
-
-        for (int innerTableBlockId : masterTable) {
-            if (innerTableBlockId != -1) {
-                std::vector<int> innerTable(ptrsPerBlock);
-                file.seekg(DATA_OFFSET + (innerTableBlockId * BLOCK_SIZE), std::ios::beg);
-                file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
-
-                for (int dataBlockId : innerTable) {
-                    if (dataBlockId != -1) freeDataBlock(dataBlockId);
-                }
-                
-                freeDataBlock(innerTableBlockId);
-            }
-        }
-        freeDataBlock(targetInode.doubleIndirect);
-        targetInode.doubleIndirect = -1;
-    }
-
+    freeInodeBlocks(targetInode);
     freeInode(targetInodeId);
 
     std::memset(parentBlock.data() + (entryIndex * sizeof(DirEntry)), 0, sizeof(DirEntry));
@@ -736,9 +699,22 @@ bool writeFile(const std::string& fileName, const std::string& content) {
         return false;
     }
 
+    long long contentSize = content.size();
+    long long blocksNeeded = (contentSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    
     std::string diskName = getDiskName();
     std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
     if (!file.is_open()) return false;
+
+    Superblock sb;
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(Superblock));
+
+    long long estimatedOverhead = (blocksNeeded / 1024) + 2; 
+    if (sb.freeBlocks < (blocksNeeded + estimatedOverhead)) {
+        std::cerr << "Error: Not enough space." << std::endl;
+        return false;
+    }
 
     // Load Inode
     Inode inode;
@@ -751,9 +727,10 @@ bool writeFile(const std::string& fileName, const std::string& content) {
         return false;
     }
 
-    // Calculate blocks needed
-    int contentSize = content.size();
-    int blocksNeeded = (contentSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    freeInodeBlocks(inode);
+    inode.size = 0;
+    file.seekp(inodeOffset, std::ios::beg);
+    file.write(reinterpret_cast<char*>(&inode), sizeof(Inode));
 
     int ptrsPerBlock = BLOCK_SIZE / sizeof(int);
     long long maxBlocks = 10 + ptrsPerBlock + (long long)ptrsPerBlock * ptrsPerBlock;
@@ -765,16 +742,17 @@ bool writeFile(const std::string& fileName, const std::string& content) {
 
     for (int i = 0; i < blocksNeeded; ++i) {
         int targetBlockId = -1;
+        bool inodeUpdated = false;
 
         // Allocate block if not exists
         if (i < 10) {
             if (inode.directBlocks[i] == -1) {
                 inode.directBlocks[i] = allocateDataBlock();
                 if (inode.directBlocks[i] == -1) return false;
+                inodeUpdated = true;
             }
             targetBlockId = inode.directBlocks[i];
         } 
-        // --- CASE B: Single Indirect (10 to 1033) ---
         else if (i < 10 + ptrsPerBlock) {
             if (inode.singleIndirect == -1) {
                 inode.singleIndirect = allocateDataBlock();
@@ -851,18 +829,22 @@ bool writeFile(const std::string& fileName, const std::string& content) {
             targetBlockId = innerTable[innerIndex];
         }
 
-        // Save data
-        int pos = i * BLOCK_SIZE;
-        int len = std::min(BLOCK_SIZE, contentSize - pos);
-        std::string chunk = content.substr(pos, len);
+        if (inodeUpdated) {
+            file.seekp(inodeOffset, std::ios::beg);
+            file.write(reinterpret_cast<char*>(&inode), sizeof(Inode));
+        }
 
+
+        long long pos = (long long)i * BLOCK_SIZE;
+        long long len = std::min((long long)BLOCK_SIZE, contentSize - pos);
+        
+        std::string chunk = content.substr(pos, len);
         std::vector<char> buffer(BLOCK_SIZE, 0);
         std::memcpy(buffer.data(), chunk.c_str(), len);
-
         saveDataBlock(targetBlockId, buffer);
     }
 
-    // Update Inode Size and Time
+    // Final Update
     inode.size = contentSize;
     inode.modifiedAt = time(nullptr);
     file.seekp(inodeOffset, std::ios::beg);
@@ -895,7 +877,6 @@ bool copyFile(const std::string& srcRaw, const std::string& destRaw) {
     createFile(destPath);
     
     if (writeFile(destPath, content)) {
-        std::cout << "File copied from '" << srcPath << "' to '" << destPath << "'." << std::endl;
         return true;
     } 
     else {
@@ -923,7 +904,7 @@ void readFile(const std::string& path) {
 
 void moveFile(const std::string& srcRaw, const std::string& destRaw) {
     if (copyFile(srcRaw, destRaw)) {
-        deleteFile(srcRaw);
+    deleteFile(srcRaw);
     } else {
         std::cout << "Move failed. Source file preserved." << std::endl;
     }
@@ -1210,7 +1191,7 @@ void addContent(const std::string& src, const std::string& dest) {
         return;
     }
 
-    int destInode = resolveParentAndName(dest).first;
+    int destInode = resolvePath(dest);
     if (destInode == -1) {
         std::cerr << "Error: Destination '" << dest << "' not found." << std::endl;
         return;

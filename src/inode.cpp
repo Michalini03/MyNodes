@@ -119,6 +119,53 @@ void freeInode(int id) {
     file.close();
 }
 
+void freeInodeBlocks(Inode& inode) {
+    std::string diskName = getDiskName();
+    std::fstream file(diskName, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file.is_open()) return;
+
+    for (int i = 0; i < 10; ++i) {
+        if (inode.directBlocks[i] != -1) {
+            freeDataBlock(inode.directBlocks[i]);
+            inode.directBlocks[i] = -1;
+        }
+    }
+
+    if (inode.singleIndirect != -1) {
+        std::vector<int> table(BLOCK_SIZE / sizeof(int));
+        file.seekg(DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE), std::ios::beg);
+        file.read(reinterpret_cast<char*>(table.data()), BLOCK_SIZE);
+
+        for (int id : table) {
+            if (id != -1) freeDataBlock(id);
+        }
+        freeDataBlock(inode.singleIndirect);
+        inode.singleIndirect = -1;
+    }
+
+    if (inode.doubleIndirect != -1) {
+        int ptrs = BLOCK_SIZE / sizeof(int);
+        std::vector<int> master(ptrs);
+        file.seekg(DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE), std::ios::beg);
+        file.read(reinterpret_cast<char*>(master.data()), BLOCK_SIZE);
+
+        for (int innerId : master) {
+            if (innerId != -1) {
+                std::vector<int> inner(ptrs);
+                file.seekg(DATA_OFFSET + (innerId * BLOCK_SIZE), std::ios::beg);
+                file.read(reinterpret_cast<char*>(inner.data()), BLOCK_SIZE);
+
+                for (int dataId : inner) {
+                    if (dataId != -1) freeDataBlock(dataId);
+                }
+                freeDataBlock(innerId);
+            }
+        }
+        freeDataBlock(inode.doubleIndirect);
+        inode.doubleIndirect = -1;
+    }
+}
+
 int calculateInodeSize(const Inode& inode) {
     return sizeof(inode);
 }

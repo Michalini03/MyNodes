@@ -20,6 +20,7 @@ void saveInode(const Inode& inode);
 int allocateInode();
 
 void freeInode(int id);
+void freeInodeBlocks(Inode& inode);
 
 int calculateInodeSize(const Inode& inode);
 
