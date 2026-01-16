@@ -8,16 +8,15 @@
 #include <sstream>
 #include <vector>
 #include <cstring>
-#include <algorithm> // For std::isspace
+#include <algorithm>
 
-static int currentDirectoryInode = 0; // Start at Root (0)
+static int currentDirectoryInode = 0; // Start as root
 
 int startConsoleProgram() {
     std::string command;
     std::cout << "Welcome to MyNodes Filesystem Console!" << std::endl;
     
     while (true) {
-        // Show current location in prompt
         std::cout << "MyNodes:/Inode" << currentDirectoryInode << "> ";
         std::getline(std::cin, command);
 
@@ -34,10 +33,9 @@ bool executeCommand(std::string commandLine) {
 
     std::stringstream ss(commandLine);
     std::string cmd;
-    ss >> cmd;
-
-    // Helper string to check for extra arguments
     std::string extra; 
+
+    ss >> cmd;
 
     if (cmd == "exit") {
         return false;
@@ -192,7 +190,6 @@ bool executeCommand(std::string commandLine) {
                 content = content.substr(firstChar);
                 writeFile(fileName, content);
             } else {
-                // It is techincally valid to write empty content
                 writeFile(fileName, "");
             }
         } else {
@@ -278,9 +275,6 @@ int resolvePath(const std::string& path) {
         
         for (int i = 0; i < maxEntries; ++i) {
             DirEntry* entry = reinterpret_cast<DirEntry*>(block.data() + (i * sizeof(DirEntry)));
-            
-            // FIX: Check name[0] instead of inodeNumber != 0
-            // Because Inode 0 is valid (Root), but an empty name means empty slot.
             if (entry->name[0] != '\0') {
                 if (std::string(entry->name) == token) {
                     nextInodeId = entry->inodeNumber;
@@ -323,7 +317,6 @@ std::pair<int, std::string> resolveParentAndName(const std::string& path) {
         for (int i = 0; i < maxEntries; ++i) {
             DirEntry* entry = reinterpret_cast<DirEntry*>(block.data() + (i * sizeof(DirEntry)));
             
-            // FIX: Same fix here. Trust the name, not the ID.
             if (entry->name[0] != '\0' && std::string(entry->name) == token) {
                 nextInode = entry->inodeNumber;
                 break;
@@ -389,7 +382,6 @@ void createDirectory(const std::string& path) {
     DirEntry dotdot;
     std::memset(dotdot.name, 0, 12);
     std::strncpy(dotdot.name, "..", 11);
-    // CRITICAL: Point ".." to the current directory (the parent)
     dotdot.inodeNumber = parentInodeId; 
 
     std::memcpy(blockData.data(), &dot, sizeof(DirEntry));
@@ -430,7 +422,6 @@ void listDirectory(int inodeId) {
         return;
     }
     
-    // Calculate entries based on size, or just scan non-empty slots
     std::cout << "Listing Directory (Inode " << inodeId << "):" << std::endl;
     
     int maxEntries = BLOCK_SIZE / sizeof(DirEntry);
@@ -491,7 +482,6 @@ bool removeDirectory(const std::string& path) {
         return false;
     }
 
-    // --- SAFETY CHECK: Prevent deleting current directory ---
     if (targetInodeId == currentDirectoryInode) {
         std::cerr << "Error: Cannot remove current working directory." << std::endl;
         return false;
@@ -550,7 +540,6 @@ void createFile(const std::string& path) {
     Inode newInode = createInode(newInodeId, false); 
     saveInode(newInode);
 
-    // 3. Add to the RESOLVED parent (not just currentDirectory)
     if (addEntryToDirectory(parentInodeId, fileName, newInodeId)) {
         return;
     } else {
@@ -716,7 +705,6 @@ bool writeFile(const std::string& fileName, const std::string& content) {
         return false;
     }
 
-    // Load Inode
     Inode inode;
     int inodeOffset = INODE_TABLE_OFFSET + (inodeId * sizeof(Inode));
     file.seekg(inodeOffset, std::ios::beg);
@@ -787,16 +775,15 @@ bool writeFile(const std::string& fileName, const std::string& content) {
             }
 
             long long relIndex = i - (10 + ptrsPerBlock);
-            int outerIndex = relIndex / ptrsPerBlock; // Which Single Indirect block?
-            int innerIndex = relIndex % ptrsPerBlock; // Which Data block inside that?
+            int outerIndex = relIndex / ptrsPerBlock;
+            int innerIndex = relIndex % ptrsPerBlock;
 
-            // 3. Read Master Table
             std::vector<int> masterTable(ptrsPerBlock);
             int masterOffset = DATA_OFFSET + (inode.doubleIndirect * BLOCK_SIZE);
             file.seekg(masterOffset, std::ios::beg);
             file.read(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
 
-            // 4. Allocate the "Inner" Single Indirect Block if needed
+            // Allocate the "Inner" Single Indirect Block if needed
             if (masterTable[outerIndex] == -1) {
                 masterTable[outerIndex] = allocateDataBlock();
                 if (masterTable[outerIndex] == -1) return false;
@@ -811,18 +798,15 @@ bool writeFile(const std::string& fileName, const std::string& content) {
                 file.write(reinterpret_cast<char*>(masterTable.data()), BLOCK_SIZE);
             }
 
-            // 5. Read the Inner Table
             std::vector<int> innerTable(ptrsPerBlock);
             int innerOffset = DATA_OFFSET + (masterTable[outerIndex] * BLOCK_SIZE);
             file.seekg(innerOffset, std::ios::beg);
             file.read(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
 
-            // 6. Allocate the actual Data Block
             if (innerTable[innerIndex] == -1) {
                 innerTable[innerIndex] = allocateDataBlock();
                 if (innerTable[innerIndex] == -1) return false;
                 
-                // Save Inner Table update
                 file.seekp(innerOffset, std::ios::beg);
                 file.write(reinterpret_cast<char*>(innerTable.data()), BLOCK_SIZE);
             }
@@ -1038,7 +1022,6 @@ void showFileStats(const std::string& fileName) {
     std::string diskName = getDiskName();
     std::fstream file(diskName, std::ios::in | std::ios::binary);
     
-    // Load Inode
     Inode inode;
     file.seekg(INODE_TABLE_OFFSET + (inodeId * sizeof(Inode)), std::ios::beg);
     file.read(reinterpret_cast<char*>(&inode), sizeof(Inode));
@@ -1070,7 +1053,6 @@ void showFileStats(const std::string& fileName) {
         std::cout << " Indirect Block: " << inode.singleIndirect << " (Table)" << std::endl;
         totalBlocks++; // Count the table block itself
 
-        // Load table to count actual data blocks used
         std::vector<int> table(BLOCK_SIZE / sizeof(int));
         file.seekg(DATA_OFFSET + (inode.singleIndirect * BLOCK_SIZE), std::ios::beg);
         file.read(reinterpret_cast<char*>(table.data()), BLOCK_SIZE);
@@ -1099,7 +1081,7 @@ void showFileStats(const std::string& fileName) {
         for (int innerBlockId : masterTable) {
             if (innerBlockId != -1) {
                 innerTables++;
-                totalBlocks++; // Count the inner table itself
+                totalBlocks++;
 
                 // Read Inner Table to count data blocks
                 std::vector<int> innerTable(BLOCK_SIZE / sizeof(int));
@@ -1155,7 +1137,6 @@ void showDiskInfo() {
 }
 
 void extendedCopy(const std::string& src1, const std::string& src2, const std::string& dest) {
-    // 1. Check Sources
     int inode1 = resolvePath(src1);
     if (inode1 == -1) {
         std::cerr << "Error: Source file '" << src1 << "' not found." << std::endl;
@@ -1168,13 +1149,12 @@ void extendedCopy(const std::string& src1, const std::string& src2, const std::s
         return;
     }
 
-    // 2. Check Destination
     if (resolvePath(dest) != -1) {
         std::cerr << "Error: Destination '" << dest << "' already exists." << std::endl;
         return;
     }
 
-    // We use the helper here because merging blocks manually is very complex
+    // Merge content
     std::string content1 = getFileContent(inode1);
     std::string content2 = getFileContent(inode2);
 
@@ -1218,7 +1198,6 @@ void printWorkingDirectory() {
     while (curr != 0) {
         std::fstream file(diskName, std::ios::in | std::ios::binary);
         
-        // 1. Get Parent Inode ID from ".."
         // ".." is always the 2nd entry (index 1) in the directory data
         Inode inode;
         file.seekg(INODE_TABLE_OFFSET + (curr * sizeof(Inode)), std::ios::beg);
@@ -1231,7 +1210,7 @@ void printWorkingDirectory() {
         DirEntry* dotdot = reinterpret_cast<DirEntry*>(block.data() + sizeof(DirEntry)); // 2nd entry
         int parentId = dotdot->inodeNumber;
 
-        // 2. Search PARENT to find what 'curr' is named
+        // Search PARENT to find what 'curr' is named
         Inode parentInode;
         file.seekg(INODE_TABLE_OFFSET + (parentId * sizeof(Inode)), std::ios::beg);
         file.read(reinterpret_cast<char*>(&parentInode), sizeof(Inode));

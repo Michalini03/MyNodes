@@ -33,7 +33,6 @@ void saveInode(const Inode& inode) {
 
     // Calculate Offset:
     // Inode Table Start + (ID * Size of Inode)
-
     int sizeofInode = calculateInodeSize(inode);
     int offset = INODE_TABLE_OFFSET + (inode.id * sizeofInode);
 
@@ -51,12 +50,11 @@ int allocateInode() {
         return -1; 
     }
 
-    // Read the Inode Bitmap (Block 1)
     std::vector<char> bitmap(BLOCK_SIZE);
     file.seekg(INODE_BITMAP_OFFSET, std::ios::beg);
     file.read(bitmap.data(), BLOCK_SIZE);
 
-    // 2. Scan for a free bit (0)
+    // Scan for a free bit (0)
     int freeId = -1;
     for (int i = 0; i < MAX_INODES; ++i) {
         int byteIndex = i / 8;
@@ -172,5 +170,5 @@ int calculateInodeSize(const Inode& inode) {
 
 int actualizeInodeTime(Inode& inode) {
     inode.modifiedAt = time(nullptr);
-    return 0; // success
+    return 0;
 }

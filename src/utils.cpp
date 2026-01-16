@@ -32,7 +32,7 @@ bool isValid83(const std::string& name) {
     if (dotPos == std::string::npos) {
         return name.length() <= 8; 
     } else {
-        // Has extension: Name <= 8, Ext <= 3
+        // Has extension: Name <= 7, Dot = 1, Ext <= 3
         std::string base = name.substr(0, dotPos);
         std::string ext = name.substr(dotPos + 1);
         return (base.length() <= 8 && ext.length() <= 3);
@@ -48,7 +48,7 @@ long long parseSize(const std::string& sizeStr) {
         else unitPart += c;
     }
     
-    if (numberPart.empty()) return 10 * 1024 * 1024; // Default 10MB
+    if (numberPart.empty()) return 10 * 1024 * 1024;
     
     long long size = std::stoll(numberPart);
     

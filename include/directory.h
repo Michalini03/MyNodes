@@ -3,5 +3,5 @@
 
 struct DirEntry {
     char name[12];      // fixed-length filename
-    int32_t inodeNumber;   // inode it points to
+    int32_t inodeNumber;   // inode index
 };

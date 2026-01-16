@@ -135,17 +135,16 @@ void saveDataBlock(int blockIndex, const std::vector<char>& data) {
 }
 
 void initializeRootDirectory() {
-    // First Inode (ID 0) is the root directory
     int inodeId = allocateInode(); 
     int blockId = allocateDataBlock();
 
     if (inodeId == -1 || blockId == -1) {
-        std::cerr << "[ERROR] Failed to allocate Inode or Data Block for root directory!" << std::endl;
+        std::cerr << "Error: Failed to allocate Inode or Data Block for root directory!" << std::endl;
         return;
     }
 
     if (inodeId != 0 || blockId != 0) {
-        std::cerr << "[ERROR] Root directory did not get Inode 0!" << std::endl;
+        std::cerr << "Error: Root directory did not get Inode 0!" << std::endl;
         std::cerr << "Initialization failed.\n Inode ID: " << inodeId << "\n Block ID: " << blockId << std::endl;
         return;
     }
